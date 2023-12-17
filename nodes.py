@@ -8,7 +8,7 @@ import math
 import numpy as np
 
 from omegaconf import OmegaConf
-from diffusers import AutoencoderKL, DDIMScheduler, UniPCMultistepScheduler
+from diffusers import AutoencoderKL, DDIMScheduler, UniPCMultistepScheduler, StableDiffusionPipeline
 from transformers import CLIPTextModel, CLIPTokenizer
 from magicanimate.models.unet_controlnet import UNet3DConditionModel
 from magicanimate.models.controlnet import ControlNetModel
@@ -36,6 +36,7 @@ class MagicAnimateModelLoader:
 
         return {
             "required": {
+                "ckpt_name": (folder_paths.get_filename_list("checkpoints"), ),
                 "controlnet" : (magic_animate_checkpoints ,{
                     "default" : magic_animate_checkpoints[0]
                 }),
@@ -55,7 +56,7 @@ class MagicAnimateModelLoader:
 
     CATEGORY = "ComfyUI Magic Animate"
 
-    def load_model(self, controlnet, appearance_encoder, motion_module, device):
+    def load_model(self, ckpt_name, controlnet, appearance_encoder, motion_module, device):
         if self.models:
             # delete old models
             all_keys = list(self.models.keys())
@@ -65,13 +66,22 @@ class MagicAnimateModelLoader:
             self.models = {}
             gc.collect()
 
+        ckpt_path = folder_paths.get_full_path("checkpoints", ckpt_name)
+        stable_diffusion = StableDiffusionPipeline.from_single_file(
+            ckpt_path,
+            torch_dtype=torch.float16,
+            load_safety_checker=False,
+            local_files_only=True,
+        )
+        print("stable_diffusion:",stable_diffusion)
+
         current_dir = os.path.dirname(os.path.realpath(__file__))
         config  = OmegaConf.load(os.path.join(current_dir, "configs", "prompts", "animation.yaml"))
         inference_config = OmegaConf.load(os.path.join(current_dir, "configs", "inference", "inference.yaml"))
         magic_animate_models_dir = folder_paths.get_folder_paths("magic_animate")[0]
         
-        config.pretrained_model_path = os.path.join(magic_animate_models_dir, "stable-diffusion-v1-5")
-        config.pretrained_vae_path = os.path.join(magic_animate_models_dir, "sd-vae-ft-mse")
+        # config.pretrained_model_path = os.path.join(magic_animate_models_dir, "stable-diffusion-v1-5")
+        # config.pretrained_vae_path = os.path.join(magic_animate_models_dir, "sd-vae-ft-mse")
         
         config.pretrained_appearance_encoder_path = os.path.join(magic_animate_models_dir, os.path.dirname(appearance_encoder))
         config.pretrained_controlnet_path = os.path.join(magic_animate_models_dir, os.path.dirname(controlnet))
@@ -79,21 +89,34 @@ class MagicAnimateModelLoader:
         config.motion_module = motion_module
 
         ### >>> create animation pipeline >>> ###
-        tokenizer = CLIPTokenizer.from_pretrained(config.pretrained_model_path, subfolder="tokenizer")
-        text_encoder = CLIPTextModel.from_pretrained(config.pretrained_model_path, subfolder="text_encoder")
-        if config.pretrained_unet_path:
-            unet = UNet3DConditionModel.from_pretrained_2d(config.pretrained_unet_path, unet_additional_kwargs=OmegaConf.to_container(inference_config.unet_additional_kwargs))
-        else:
-            unet = UNet3DConditionModel.from_pretrained_2d(config.pretrained_model_path, subfolder="unet", unet_additional_kwargs=OmegaConf.to_container(inference_config.unet_additional_kwargs))
+        # tokenizer = CLIPTokenizer.from_pretrained(config.pretrained_model_path, subfolder="tokenizer")
+        tokenizer = stable_diffusion.tokenizer
+
+
+        # text_encoder = CLIPTextModel.from_pretrained(config.pretrained_model_path, subfolder="text_encoder")
+        text_encoder = stable_diffusion.text_encoder
+
+        # if config.pretrained_unet_path:
+        #     unet = UNet3DConditionModel.from_pretrained_2d(config.pretrained_unet_path, unet_additional_kwargs=OmegaConf.to_container(inference_config.unet_additional_kwargs))
+        # else:
+        #     unet = UNet3DConditionModel.from_pretrained_2d(config.pretrained_model_path, subfolder="unet", unet_additional_kwargs=OmegaConf.to_container(inference_config.unet_additional_kwargs))
         
+        raw_unet = stable_diffusion.unet
+        unet = UNet3DConditionModel.from_model(
+        raw_unet, unet_additional_kwargs=OmegaConf.to_container(inference_config.unet_additional_kwargs))
+        del raw_unet
+        gc.collect()
+
+
         appearance_encoder = AppearanceEncoderModel.from_pretrained(config.pretrained_appearance_encoder_path).to(device)
         reference_control_writer = ReferenceAttentionControl(appearance_encoder, do_classifier_free_guidance=True, mode='write', fusion_blocks=config.fusion_blocks)
         
         reference_control_reader = ReferenceAttentionControl(unet, do_classifier_free_guidance=True, mode='read', fusion_blocks=config.fusion_blocks)
-        vae = AutoencoderKL.from_pretrained(config.pretrained_vae_path)
+        # vae = AutoencoderKL.from_pretrained(config.pretrained_vae_path)
+        vae = stable_diffusion.vae
 
         ### Load controlnet
-        controlnet   = ControlNetModel.from_pretrained(config.pretrained_controlnet_path)
+        controlnet = ControlNetModel.from_pretrained(config.pretrained_controlnet_path)
 
         # unet.enable_xformers_memory_efficient_attention()
         # appearance_encoder.enable_xformers_memory_efficient_attention()
@@ -209,13 +232,34 @@ class MagicAnimate:
         image_tensor = rearrange(image_tensor, 'c h w -> h w c')
         return image_tensor
 
+    def resize_image_frame_wh(self, image_tensor, size_w, size_h):
+        # if image_tensor is a numpy array, convert it to a tensor
+        if isinstance(image_tensor, np.ndarray):
+            image_tensor = torch.from_numpy(image_tensor)
+        # permute to C x H x W
+        image_tensor = rearrange(image_tensor, 'h w c -> c h w')
+        # print(image.shape)
+        image_tensor = ToPILImage()(image_tensor)
+        # print(image_tensor.shape)
+        image_tensor = image_tensor.resize((size_w, size_h))
+        # print(image_tensor.shape)
+        image_tensor = ToTensor()(image_tensor)
+        # permute back to H x W x C
+        image_tensor = rearrange(image_tensor, 'c h w -> h w c')
+        return image_tensor
+
 
     def generate(self, magic_animate_model, image, pose_video, seed, inference_steps):
         num_actual_inference_steps = inference_steps
 
         pipeline = magic_animate_model['pipeline']
         config = magic_animate_model['config']
-        size = config.size
+        # size = config.size
+        control = pose_video.detach().cpu().numpy() # (num_frames, H, W, C)
+        size_w = control.shape[2]
+        size_h = control.shape[1]
+
+
         appearance_encoder = magic_animate_model['appearance_encoder']
         reference_control_writer = magic_animate_model['reference_control_writer']
         reference_control_reader = magic_animate_model['reference_control_reader']
@@ -224,21 +268,21 @@ class MagicAnimate:
         image = image[0]
         H, W, C = image.shape
 
-        if H != size or W != size:
+        if H != size_h or W != size_w:
             # resize image to be (size, size)
-            image = self.resize_image_frame(image, size)
+            image = self.resize_image_frame_wh(image, size_w, size_h)
             # print(image.shape)
             H, W, C = image.shape
             
         image = image * 255 
         prompt = ""
         n_prompt = ""
-        control = pose_video.detach().cpu().numpy() # (num_frames, H, W, C)
         print("control shape:", control.shape)
 
-        if control.shape[1] != size or control.shape[2] != size:
+        if control.shape[1] != size_h or control.shape[2] != size_w:
             # resize each frame in control to be (size, size)
-            control = torch.stack([self.resize_image_frame(frame, size) for frame in control], dim=0)
+            control = torch.stack([self.resize_image_frame_wh(frame, size_w, size_h) for frame in control], dim=0)
+            control = control.detach().cpu().numpy()
 
         init_latents = None
 
@@ -253,7 +297,7 @@ class MagicAnimate:
         sample = pipeline(
             prompt,
             negative_prompt         = n_prompt,
-            num_inference_steps     = config.steps,
+            num_inference_steps     = inference_steps,
             guidance_scale          = config.guidance_scale,
             width                   = W,
             height                  = H,

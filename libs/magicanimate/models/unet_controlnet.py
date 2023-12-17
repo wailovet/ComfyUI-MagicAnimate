@@ -523,3 +523,70 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
         print(f"### Temporal Module Parameters: {sum(params) / 1e6} M")
         
         return model
+
+
+
+    @classmethod
+    def from_model(cls, unet, unet_additional_kwargs=None,):
+        config = {
+            "_class_name": "UNet2DConditionModel",
+            "_diffusers_version": "0.6.0",
+            "act_fn": "silu",
+            "attention_head_dim": 8,
+            "block_out_channels": [
+                320,
+                640,
+                1280,
+                1280
+            ],
+            "center_input_sample": False,
+            "cross_attention_dim": 768,
+            "down_block_types": [
+                "CrossAttnDownBlock2D",
+                "CrossAttnDownBlock2D",
+                "CrossAttnDownBlock2D",
+                "DownBlock2D"
+            ],
+            "downsample_padding": 1,
+            "flip_sin_to_cos": False,
+            "freq_shift": 0,
+            "in_channels": 4,
+            "layers_per_block": 2,
+            "mid_block_scale_factor": 1,
+            "norm_eps": 1e-05,
+            "norm_num_groups": 32,
+            "out_channels": 4,
+            "sample_size": 64,
+            "up_block_types": [
+                "UpBlock2D",
+                "CrossAttnUpBlock2D",
+                "CrossAttnUpBlock2D",
+                "CrossAttnUpBlock2D"
+            ]
+        }
+
+        config["_class_name"] = cls.__name__
+        config["down_block_types"] = [
+            "CrossAttnDownBlock3D",
+            "CrossAttnDownBlock3D",
+            "CrossAttnDownBlock3D",
+            "DownBlock3D"
+        ]
+        config["up_block_types"] = [
+            "UpBlock3D",
+            "CrossAttnUpBlock3D",
+            "CrossAttnUpBlock3D",
+            "CrossAttnUpBlock3D"
+        ]
+
+        model = cls.from_config(config, **unet_additional_kwargs)
+        state_dict = unet.state_dict()
+        m, u = model.load_state_dict(state_dict, strict=False)
+        print(f"### missing keys: {len(m)}; \n### unexpected keys: {len(u)};")
+        # print(f"### missing keys:\n{m}\n### unexpected keys:\n{u}\n")
+
+        params = [p.numel() if "temporal" in n else 0 for n,
+                  p in model.named_parameters()]
+        print(f"### Temporal Module Parameters: {sum(params) / 1e6} M")
+
+        return model
