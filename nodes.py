@@ -256,8 +256,8 @@ class MagicAnimate:
         config = magic_animate_model['config']
         # size = config.size
         control = pose_video.detach().cpu().numpy() # (num_frames, H, W, C)
-        size_w = control.shape[2]
-        size_h = control.shape[1]
+        size_w = control.shape[2] // 8 * 8
+        size_h = control.shape[1] // 8 * 8
 
 
         appearance_encoder = magic_animate_model['appearance_encoder']
@@ -277,13 +277,13 @@ class MagicAnimate:
         image = image * 255 
         prompt = ""
         n_prompt = ""
-        print("control shape:", control.shape)
 
         if control.shape[1] != size_h or control.shape[2] != size_w:
             # resize each frame in control to be (size, size)
             control = torch.stack([self.resize_image_frame_wh(frame, size_w, size_h) for frame in control], dim=0)
             control = control.detach().cpu().numpy()
 
+        # print("control shape:", control.shape,size_w,size_h)
         init_latents = None
 
         original_length = control.shape[0]
