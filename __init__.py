@@ -3,6 +3,7 @@ import os
 import sys
 sys.dont_write_bytecode = True
 
+sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__))))
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), "libs"))
 
 os.makedirs(os.path.join(folder_paths.models_dir, "MagicAnimate"), exist_ok=True)

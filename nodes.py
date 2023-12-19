@@ -6,6 +6,10 @@ import torch
 import os
 import math
 import numpy as np
+from comfy.model_patcher import ModelPatcher
+from comfy.sd import VAE
+
+from comfy.sd import CLIP
 
 from omegaconf import OmegaConf
 from diffusers import AutoencoderKL, DDIMScheduler, UniPCMultistepScheduler, StableDiffusionPipeline
@@ -20,6 +24,7 @@ from magicanimate.utils.dist_tools import distributed_init
 from accelerate.utils import set_seed
 from collections import OrderedDict
 from PIL import Image
+import convert_diffusers_to_sd
 
 class MagicAnimateModelLoader:
     def __init__(self):
@@ -36,6 +41,9 @@ class MagicAnimateModelLoader:
 
         return {
             "required": {
+                "model": ("MODEL",),
+                "clip": ("CLIP", ),
+                "vae": ("VAE", ),
                 "ckpt_name": (folder_paths.get_filename_list("checkpoints"), ),
                 "controlnet" : (magic_animate_checkpoints ,{
                     "default" : magic_animate_checkpoints[0]
@@ -56,7 +64,11 @@ class MagicAnimateModelLoader:
 
     CATEGORY = "ComfyUI Magic Animate"
 
-    def load_model(self, ckpt_name, controlnet, appearance_encoder, motion_module, device):
+    def load_model(self, model: ModelPatcher, clip:CLIP, vae:VAE, ckpt_name, controlnet, appearance_encoder, motion_module, device): 
+         
+ 
+          
+
         if self.models:
             # delete old models
             all_keys = list(self.models.keys())
@@ -90,8 +102,8 @@ class MagicAnimateModelLoader:
 
         ### >>> create animation pipeline >>> ###
         # tokenizer = CLIPTokenizer.from_pretrained(config.pretrained_model_path, subfolder="tokenizer")
-        tokenizer = stable_diffusion.tokenizer
-
+        # tokenizer = stable_diffusion.tokenizer
+        tokenizer = clip.tokenizer
 
         # text_encoder = CLIPTextModel.from_pretrained(config.pretrained_model_path, subfolder="text_encoder")
         text_encoder = stable_diffusion.text_encoder
@@ -101,19 +113,23 @@ class MagicAnimateModelLoader:
         # else:
         #     unet = UNet3DConditionModel.from_pretrained_2d(config.pretrained_model_path, subfolder="unet", unet_additional_kwargs=OmegaConf.to_container(inference_config.unet_additional_kwargs))
         
-        raw_unet = stable_diffusion.unet
-        unet = UNet3DConditionModel.from_model(
-        raw_unet, unet_additional_kwargs=OmegaConf.to_container(inference_config.unet_additional_kwargs))
-        del raw_unet
-        gc.collect()
+      
+
+        model_state_dict = model.model_state_dict()
+        model_state_dict = convert_diffusers_to_sd.unet_convert(model_state_dict)
+        unet = UNet3DConditionModel.from_state_dict(
+            model_state_dict, unet_additional_kwargs=OmegaConf.to_container(inference_config.unet_additional_kwargs))
+        
 
 
         appearance_encoder = AppearanceEncoderModel.from_pretrained(config.pretrained_appearance_encoder_path).to(device)
         reference_control_writer = ReferenceAttentionControl(appearance_encoder, do_classifier_free_guidance=True, mode='write', fusion_blocks=config.fusion_blocks)
         
         reference_control_reader = ReferenceAttentionControl(unet, do_classifier_free_guidance=True, mode='read', fusion_blocks=config.fusion_blocks)
-        # vae = AutoencoderKL.from_pretrained(config.pretrained_vae_path)
-        vae = stable_diffusion.vae
+        
+        vae = convert_diffusers_to_sd.vae_from_state_dict(vae.get_sd())
+
+        # vae = vae.first_stage_model
 
         ### Load controlnet
         controlnet = ControlNetModel.from_pretrained(config.pretrained_controlnet_path)
