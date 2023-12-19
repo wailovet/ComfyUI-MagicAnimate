@@ -249,7 +249,7 @@ class MagicAnimate:
             "optional": {
                 "prompt": ("STRING",{
                     "multiline": True,
-                    "default": "(masterpiece,intricate, elegant, highly detailed, majestic, digital photography)"
+                    "default": "(masterpiece)"
                 }),
                 "negative_prompt": ("STRING",{
                     "multiline": True,
