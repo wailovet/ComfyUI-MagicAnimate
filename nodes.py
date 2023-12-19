@@ -4,12 +4,16 @@ import gc
 import folder_paths
 import torch
 import os
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 import math
 import numpy as np
 from comfy.model_patcher import ModelPatcher
 from comfy.sd import VAE
 
 from comfy.sd import CLIP
+from comfy.sd1_clip import SDTokenizer
+
+from comfy.sd1_clip import SD1Tokenizer
 
 from omegaconf import OmegaConf
 from diffusers import AutoencoderKL, DDIMScheduler, UniPCMultistepScheduler, StableDiffusionPipeline
@@ -79,13 +83,13 @@ class MagicAnimateModelLoader:
             gc.collect()
 
         ckpt_path = folder_paths.get_full_path("checkpoints", ckpt_name)
-        stable_diffusion = StableDiffusionPipeline.from_single_file(
-            ckpt_path,
-            torch_dtype=torch.float16,
-            load_safety_checker=False,
-            local_files_only=True,
-        )
-        print("stable_diffusion:",stable_diffusion)
+        # stable_diffusion = StableDiffusionPipeline.from_single_file(
+        #     ckpt_path,
+        #     torch_dtype=torch.float16,
+        #     load_safety_checker=False,
+        #     local_files_only=True,
+        # )
+        # print("stable_diffusion:",stable_diffusion)
 
         current_dir = os.path.dirname(os.path.realpath(__file__))
         config  = OmegaConf.load(os.path.join(current_dir, "configs", "prompts", "animation.yaml"))
@@ -102,11 +106,14 @@ class MagicAnimateModelLoader:
 
         ### >>> create animation pipeline >>> ###
         # tokenizer = CLIPTokenizer.from_pretrained(config.pretrained_model_path, subfolder="tokenizer")
-        # tokenizer = stable_diffusion.tokenizer
-        tokenizer = clip.tokenizer
+        tokenizer:SD1Tokenizer = clip.tokenizer
+        tokenizer:SDTokenizer = getattr(tokenizer, tokenizer.clip)
+        tokenizer:CLIPTokenizer = tokenizer.tokenizer
+        print("tokenizer:",tokenizer)
 
         # text_encoder = CLIPTextModel.from_pretrained(config.pretrained_model_path, subfolder="text_encoder")
-        text_encoder = stable_diffusion.text_encoder
+        text_encoder = clip.get_sd()
+        text_encoder = convert_diffusers_to_sd.clip_from_state_dict(text_encoder) 
 
         # if config.pretrained_unet_path:
         #     unet = UNet3DConditionModel.from_pretrained_2d(config.pretrained_unet_path, unet_additional_kwargs=OmegaConf.to_container(inference_config.unet_additional_kwargs))
