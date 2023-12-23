@@ -55,7 +55,7 @@ def clip_convert(state_dict):
 def vae_from_state_dict(state_dict):
     config = {
         "_class_name": "AutoencoderKL",
-        "_diffusers_version": "0.6.0",
+        "_diffusers_version": "0.4.2",
         "act_fn": "silu",
         "block_out_channels": [
             128,
@@ -74,7 +74,7 @@ def vae_from_state_dict(state_dict):
         "layers_per_block": 2,
         "norm_num_groups": 32,
         "out_channels": 3,
-        "sample_size": 512,
+        "sample_size": 256,
         "up_block_types": [
             "UpDecoderBlock2D",
             "UpDecoderBlock2D",
@@ -85,7 +85,8 @@ def vae_from_state_dict(state_dict):
     vae = AutoencoderKL.from_config(config)
     vae_state_dict = convert_ldm_vae_checkpoint(state_dict, config)
     m, u = vae.load_state_dict(vae_state_dict, strict=False)
-    print(f"### vae_from_state_dict missing keys: {len(m)}; \n### vae_from_state_dict unexpected keys: {len(u)};")
+    print(
+        f"### vae_from_state_dict missing keys: {len(m)}; \n### vae_from_state_dict unexpected keys: {len(u)};")
     return vae
 
 
@@ -121,7 +122,8 @@ def clip_from_state_dict(state_dict):
 
     m, u = clip.load_state_dict(clip_state_dict, strict=False)
 
-    print(f"### clip_from_state_dict missing keys: {len(m)}; \n### clip_from_state_dict unexpected keys: {len(u)};")
+    print(
+        f"### clip_from_state_dict missing keys: {len(m)}; \n### clip_from_state_dict unexpected keys: {len(u)};")
     return clip
 
 
