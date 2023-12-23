@@ -154,6 +154,7 @@ class MagicAnimateModelLoader:
         self.models['device'] = device
         self.models['reference_control_writer'] = reference_control_writer
         self.models['reference_control_reader'] = reference_control_reader
+        self.models['noise_scheduler_kwargs'] = inference_config.noise_scheduler_kwargs
 
         return (self.models,)
 
@@ -170,17 +171,19 @@ def load_animation_pipeline(models):
     sampler_name = models['sampler_name']
     print("sampler_name:",sampler_name)
 
+    noise_scheduler_kwargs = models['noise_scheduler_kwargs']
+
     scheduler = None
     if sampler_name == "DDIM":
-        scheduler = DDIMScheduler()
+        scheduler = DDIMScheduler(**OmegaConf.to_container(noise_scheduler_kwargs))
     elif sampler_name == "UniPCMultistep":
-        scheduler = UniPCMultistepScheduler()
+        scheduler = UniPCMultistepScheduler(**OmegaConf.to_container(noise_scheduler_kwargs))
     elif sampler_name == "LCM":
-        scheduler = LCMScheduler()
+        scheduler = LCMScheduler(**OmegaConf.to_container(noise_scheduler_kwargs))
     elif sampler_name == "EulerDiscrete":
-        scheduler = EulerDiscreteScheduler()
+        scheduler = EulerDiscreteScheduler(**OmegaConf.to_container(noise_scheduler_kwargs))
     elif sampler_name == "EulerAncestralDiscrete":
-        scheduler = EulerAncestralDiscreteScheduler()
+        scheduler = EulerAncestralDiscreteScheduler(**OmegaConf.to_container(noise_scheduler_kwargs))
 
     pipeline = AnimationPipeline(
         vae=vae, 
