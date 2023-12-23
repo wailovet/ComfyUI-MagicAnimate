@@ -7,16 +7,18 @@ import os
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 import math
 import numpy as np
+from comfy.samplers import KSampler
 from comfy.model_patcher import ModelPatcher
 from comfy.sd import VAE
 
 from comfy.sd import CLIP
 from comfy.sd1_clip import SDTokenizer
 
-from comfy.sd1_clip import SD1Tokenizer
+from comfy.sd1_clip import SD1Tokenizer,SD1ClipModel,SDClipModel
 
 from omegaconf import OmegaConf
-from diffusers import AutoencoderKL, DDIMScheduler, UniPCMultistepScheduler, StableDiffusionPipeline
+from diffusers import AutoencoderKL, StableDiffusionPipeline
+from diffusers import DDIMScheduler, UniPCMultistepScheduler,LCMScheduler, EulerDiscreteScheduler, EulerAncestralDiscreteScheduler
 from transformers import CLIPTextModel, CLIPTokenizer
 from magicanimate.models.unet_controlnet import UNet3DConditionModel
 from magicanimate.models.controlnet import ControlNetModel
@@ -29,6 +31,9 @@ from accelerate.utils import set_seed
 from collections import OrderedDict
 from PIL import Image
 import convert_diffusers_to_sd
+
+
+
 
 class MagicAnimateModelLoader:
     def __init__(self):
@@ -47,8 +52,7 @@ class MagicAnimateModelLoader:
             "required": {
                 "model": ("MODEL",),
                 "clip": ("CLIP", ),
-                "vae": ("VAE", ),
-                "ckpt_name": (folder_paths.get_filename_list("checkpoints"), ),
+                "vae": ("VAE", ), 
                 "controlnet" : (magic_animate_checkpoints ,{
                     "default" : magic_animate_checkpoints[0]
                 }),
@@ -68,11 +72,8 @@ class MagicAnimateModelLoader:
 
     CATEGORY = "ComfyUI Magic Animate"
 
-    def load_model(self, model: ModelPatcher, clip:CLIP, vae:VAE, ckpt_name, controlnet, appearance_encoder, motion_module, device): 
+    def load_model(self, model: ModelPatcher, clip:CLIP, vae:VAE, controlnet, appearance_encoder, motion_module, device): 
          
- 
-          
-
         if self.models:
             # delete old models
             all_keys = list(self.models.keys())
@@ -81,23 +82,12 @@ class MagicAnimateModelLoader:
                 del self.models[key]
             self.models = {}
             gc.collect()
-
-        ckpt_path = folder_paths.get_full_path("checkpoints", ckpt_name)
-        # stable_diffusion = StableDiffusionPipeline.from_single_file(
-        #     ckpt_path,
-        #     torch_dtype=torch.float16,
-        #     load_safety_checker=False,
-        #     local_files_only=True,
-        # )
-        # print("stable_diffusion:",stable_diffusion)
-
+ 
         current_dir = os.path.dirname(os.path.realpath(__file__))
         config  = OmegaConf.load(os.path.join(current_dir, "configs", "prompts", "animation.yaml"))
         inference_config = OmegaConf.load(os.path.join(current_dir, "configs", "inference", "inference.yaml"))
         magic_animate_models_dir = folder_paths.get_folder_paths("magic_animate")[0]
-        
-        # config.pretrained_model_path = os.path.join(magic_animate_models_dir, "stable-diffusion-v1-5")
-        # config.pretrained_vae_path = os.path.join(magic_animate_models_dir, "sd-vae-ft-mse")
+         
         
         config.pretrained_appearance_encoder_path = os.path.join(magic_animate_models_dir, os.path.dirname(appearance_encoder))
         config.pretrained_controlnet_path = os.path.join(magic_animate_models_dir, os.path.dirname(controlnet))
@@ -108,10 +98,10 @@ class MagicAnimateModelLoader:
         # tokenizer = CLIPTokenizer.from_pretrained(config.pretrained_model_path, subfolder="tokenizer")
         tokenizer:SD1Tokenizer = clip.tokenizer
         tokenizer:SDTokenizer = getattr(tokenizer, tokenizer.clip)
-        tokenizer:CLIPTokenizer = tokenizer.tokenizer
-        print("tokenizer:",tokenizer)
+        tokenizer:CLIPTokenizer = tokenizer.tokenizer 
 
-        # text_encoder = CLIPTextModel.from_pretrained(config.pretrained_model_path, subfolder="text_encoder")
+
+        # text_encoder = CLIPTextModel.from_pretrained(config.pretrained_model_path, subfolder="text_encoder") 
         text_encoder = clip.get_sd()
         text_encoder = convert_diffusers_to_sd.clip_from_state_dict(text_encoder) 
 
@@ -150,66 +140,89 @@ class MagicAnimateModelLoader:
         text_encoder.to(torch.float16)
         appearance_encoder.to(torch.float16)
         controlnet.to(torch.float16)
-
-        pipeline = AnimationPipeline(
-            vae=vae, 
-            text_encoder=text_encoder, 
-            tokenizer=tokenizer, 
-            unet=unet, 
-            controlnet=controlnet,
-            scheduler=DDIMScheduler(
-                **OmegaConf.to_container(
-                    inference_config.noise_scheduler_kwargs
-                )
-            ),
-        )
-
-        # 1. unet ckpt
-        # 1.1 motion module
-        motion_module_state_dict = torch.load(motion_module, map_location="cpu")
-        # if "global_step" in motion_module_state_dict: func_args.update({"global_step": motion_module_state_dict["global_step"]})
-        motion_module_state_dict = motion_module_state_dict['state_dict'] if 'state_dict' in motion_module_state_dict else motion_module_state_dict
-        try:
-            # extra steps for self-trained models
-            state_dict = OrderedDict()
-            for key in motion_module_state_dict.keys():
-                if key.startswith("module."):
-                    _key = key.split("module.")[-1]
-                    state_dict[_key] = motion_module_state_dict[key]
-                else:
-                    state_dict[key] = motion_module_state_dict[key]
-            motion_module_state_dict = state_dict
-            del state_dict
-            missing, unexpected = pipeline.unet.load_state_dict(motion_module_state_dict, strict=False)
-            assert len(unexpected) == 0
-        except:
-            _tmp_ = OrderedDict()
-            for key in motion_module_state_dict.keys():
-                if "motion_modules" in key:
-                    if key.startswith("unet."):
-                        _key = key.split('unet.')[-1]
-                        _tmp_[_key] = motion_module_state_dict[key]
-                    else:
-                        _tmp_[key] = motion_module_state_dict[key]
-            missing, unexpected = unet.load_state_dict(_tmp_, strict=False)
-            assert len(unexpected) == 0
-            del _tmp_
-        del motion_module_state_dict
-
-        pipeline.to(device)
+ 
+ 
 
         self.models['vae'] = vae
         self.models['text_encoder'] = text_encoder
         self.models['appearance_encoder'] = appearance_encoder
         self.models['tokenizer'] = tokenizer
         self.models['unet'] = unet
-        self.models['controlnet'] = controlnet
-        self.models['pipeline'] = pipeline
+        self.models['controlnet'] = controlnet 
         self.models['config'] = config
+        self.models['motion_module'] = motion_module
+        self.models['device'] = device
         self.models['reference_control_writer'] = reference_control_writer
         self.models['reference_control_reader'] = reference_control_reader
 
         return (self.models,)
+
+
+
+def load_animation_pipeline(models):
+    vae = models['vae']
+    text_encoder = models['text_encoder']
+    tokenizer = models['tokenizer']
+    unet = models['unet']
+    controlnet = models['controlnet'] 
+    device = models['device']
+
+    sampler_name = models['sampler_name']
+    print("sampler_name:",sampler_name)
+
+    scheduler = None
+    if sampler_name == "DDIM":
+        scheduler = DDIMScheduler()
+    elif sampler_name == "UniPCMultistep":
+        scheduler = UniPCMultistepScheduler()
+    elif sampler_name == "LCM":
+        scheduler = LCMScheduler()
+    elif sampler_name == "EulerDiscrete":
+        scheduler = EulerDiscreteScheduler()
+    elif sampler_name == "EulerAncestralDiscrete":
+        scheduler = EulerAncestralDiscreteScheduler()
+
+    pipeline = AnimationPipeline(
+        vae=vae, 
+        text_encoder=text_encoder, 
+        tokenizer=tokenizer, 
+        unet=unet, 
+        controlnet=controlnet,
+        scheduler=scheduler,
+    )
+    motion_module_state_dict = torch.load(models['motion_module'], map_location="cpu")
+    motion_module_state_dict = motion_module_state_dict['state_dict'] if 'state_dict' in motion_module_state_dict else motion_module_state_dict
+    try:
+        # extra steps for self-trained models
+        state_dict = OrderedDict()
+        for key in motion_module_state_dict.keys():
+            if key.startswith("module."):
+                _key = key.split("module.")[-1]
+                state_dict[_key] = motion_module_state_dict[key]
+            else:
+                state_dict[key] = motion_module_state_dict[key]
+        motion_module_state_dict = state_dict
+        del state_dict
+        missing, unexpected = pipeline.unet.load_state_dict(motion_module_state_dict, strict=False)
+        assert len(unexpected) == 0
+    except:
+        _tmp_ = OrderedDict()
+        for key in motion_module_state_dict.keys():
+            if "motion_modules" in key:
+                if key.startswith("unet."):
+                    _key = key.split('unet.')[-1]
+                    _tmp_[_key] = motion_module_state_dict[key]
+                else:
+                    _tmp_[key] = motion_module_state_dict[key]
+        missing, unexpected = unet.load_state_dict(_tmp_, strict=False)
+        assert len(unexpected) == 0
+        del _tmp_
+    del motion_module_state_dict
+
+    
+    pipeline.to(device)
+
+    return pipeline
 
 class MagicAnimate:
     def __init__(self):
@@ -228,6 +241,19 @@ class MagicAnimate:
                 "inference_steps" : ("INT", {
                     "default" : 25,
                     "display": "number" # Cosmetic only: display as "number" or "slider"
+                }),
+                "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0, "step":0.1, "round": 0.01}),
+                "sampler_name": (["DDIM", "UniPCMultistep", "LCM", "EulerDiscrete", "EulerAncestralDiscrete"],),
+                # "scheduler": (KSampler.SCHEDULERS, ),
+            },
+            "optional": {
+                "prompt": ("STRING",{
+                    "multiline": True,
+                    "default": "(masterpiece)"
+                }),
+                "negative_prompt": ("STRING",{
+                    "multiline": True,
+                    "default": "(blurry, low resolution, low quality, low fidelity, low res, low def, low-def, low-res)"
                 }),
             },
         }
@@ -272,10 +298,13 @@ class MagicAnimate:
         return image_tensor
 
 
-    def generate(self, magic_animate_model, image, pose_video, seed, inference_steps):
-        num_actual_inference_steps = inference_steps
+    def generate(self, magic_animate_model, image, pose_video, seed, inference_steps, cfg, sampler_name, prompt, negative_prompt):
+        num_actual_inference_steps = inference_steps 
+ 
+        magic_animate_model['sampler_name'] = sampler_name
+        pipeline = load_animation_pipeline(magic_animate_model)
 
-        pipeline = magic_animate_model['pipeline']
+
         config = magic_animate_model['config']
         # size = config.size
         control = pose_video.detach().cpu().numpy() # (num_frames, H, W, C)
@@ -297,10 +326,7 @@ class MagicAnimate:
             # print(image.shape)
             H, W, C = image.shape
             
-        image = image * 255 
-        prompt = ""
-        n_prompt = ""
-
+        image = image * 255  
         if control.shape[1] != size_h or control.shape[2] != size_w:
             # resize each frame in control to be (size, size)
             control = torch.stack([self.resize_image_frame_wh(frame, size_w, size_h) for frame in control], dim=0)
@@ -319,9 +345,9 @@ class MagicAnimate:
 
         sample = pipeline(
             prompt,
-            negative_prompt         = n_prompt,
+            negative_prompt         = negative_prompt,
             num_inference_steps     = inference_steps,
-            guidance_scale          = config.guidance_scale,
+            guidance_scale          = cfg,
             width                   = W,
             height                  = H,
             video_length            = len(control),
@@ -333,6 +359,7 @@ class MagicAnimate:
             reference_control_writer = reference_control_writer,
             reference_control_reader = reference_control_reader,
             source_image             = image.detach().cpu().numpy(),
+            sampler_name            = sampler_name,
             **dist_kwargs,
         ).videos
 
